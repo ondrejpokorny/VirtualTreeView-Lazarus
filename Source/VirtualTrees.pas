@@ -2544,6 +2544,7 @@ type
     procedure Change(Node: PVirtualNode); virtual;
     procedure ChangeScale(M, D: Integer); override;
     function CheckParentCheckState(Node: PVirtualNode; NewCheckState: TCheckState): Boolean; virtual;
+    procedure ClearSelection(pFireChangeEvent: Boolean); overload; virtual;
     procedure ClearTempCache; virtual;
     function ColumnIsEmpty(Node: PVirtualNode; Column: TColumnIndex): Boolean; virtual;
     function ComputeRTLOffset(ExcludeScrollBar: Boolean = False): Integer; virtual;
@@ -3005,7 +3006,7 @@ type
     function CanEdit(Node: PVirtualNode; Column: TColumnIndex): Boolean; virtual;
     procedure Clear; virtual;
     procedure ClearChecked;
-    procedure ClearSelection;
+    procedure ClearSelection; overload;
     function CopyTo(Source: PVirtualNode; Tree: TBaseVirtualTree; Mode: TVTNodeAttachMode;
       ChildrenOnly: Boolean): PVirtualNode; overload;
     function CopyTo(Source, Target: PVirtualNode; Mode: TVTNodeAttachMode;
@@ -16735,7 +16736,7 @@ begin
         ForceSelection := False;
         if ClearPending and ((LastFocused <> FFocusedNode) or (FSelectionCount <> 1)) then
         begin
-          ClearSelection;
+          ClearSelection(False);
           ForceSelection := True;
         end;
 
@@ -22310,7 +22311,7 @@ begin
       end;
     end
     else if not ((hiNowhere in HitInfo.HitPositions) and (toAlwaysSelectNode in Self.TreeOptions.SelectionOptions)) then // When clicking in the free space we don't want the selection to be cleared in case toAlwaysSelectNode is set
-      ClearSelection;
+      ClearSelection(False);
   end;
 
   // pending node edit
@@ -22374,6 +22375,9 @@ begin
       DoFocusChange(FFocusedNode, FFocusedColumn);
     end;
   end;
+
+  if SelectedCount = 0 then
+    Change(nil);
 
   // Drag'n drop initiation
   // If we lost focus in the interim the button states would be cleared in WM_KILLFOCUS.
@@ -25825,7 +25829,7 @@ end;
 
 //----------------------------------------------------------------------------------------------------------------------
 
-procedure TBaseVirtualTree.ClearSelection;
+procedure TBaseVirtualTree.ClearSelection(pFireChangeEvent: Boolean);
 
 var
   Node: PVirtualNode;
@@ -25862,8 +25866,17 @@ begin
     end;
 
     InternalClearSelection;
-    Change(nil);
+    if pFireChangeEvent then
+      Change(nil);
   end;
+end;
+
+//----------------------------------------------------------------------------------------------------------------------
+
+procedure TBaseVirtualTree.ClearSelection;
+
+begin
+  ClearSelection(True);
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
