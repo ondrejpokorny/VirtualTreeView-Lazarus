@@ -25615,7 +25615,7 @@ procedure TBaseVirtualTree.AutoScale();
 var
   lTextHeight: Cardinal;
 begin
-  if (toAutoChangeScale in TreeOptions.AutoOptions) then
+  if (toAutoChangeScale in TreeOptions.AutoOptions) and HandleAllocated then
   begin
     Canvas.Font.Assign(Self.Font);
     lTextHeight := Canvas.TextHeight('Tg');
