@@ -8,8 +8,7 @@ unit virtualtreeview_package;
 interface
 
 uses
-  VirtualTrees, VTHeaderPopup, registervirtualtreeview, VTGraphics, 
-  VTIDEEditors, LazarusPackageIntf;
+  registervirtualtreeview, VTIDEEditors, LazarusPackageIntf;
 
 implementation
 

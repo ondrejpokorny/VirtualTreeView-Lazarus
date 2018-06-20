@@ -28,8 +28,8 @@ procedure Register;
 
 begin
   RegisterComponentEditor([TVirtualDrawTree, TVirtualStringTree], TVirtualTreeEditor);
-  RegisterUnit('VirtualTrees', @RegisterUnitVirtualTrees);
-  RegisterUnit('VTHeaderPopup', @RegisterUnitVTHeaderPopup);
+  RegisterUnitVirtualTrees;
+  RegisterUnitVTHeaderPopup;
 end;
 
 initialization

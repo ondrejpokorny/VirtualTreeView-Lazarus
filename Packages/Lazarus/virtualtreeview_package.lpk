@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Package Version="4">
+    <PathDelim Value="\"/>
+    <Name Value="virtualtreeview_package"/>
+    <Type Value="DesignTime"/>
+    <Author Value="Mike Lischke (LCL Port: Luiz Américo)"/>
+    <CompilerOptions>
+      <Version Value="11"/>
+      <PathDelim Value="\"/>
+      <SearchPaths>
+        <IncludeFiles Value="..\..\Design"/>
+        <OtherUnitFiles Value="..\..\Design"/>
+        <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+      </SearchPaths>
+    </CompilerOptions>
+    <Description Value="Virtual Treeview is an advanced TreeView component
+"/>
+    <License Value="Mozilla Public License 1.1 (MPL 1.1) or GNU Lesser General Public License
+
+IDEIntf part - GPL"/>
+    <Version Major="5" Minor="3" Release="2" Build="1"/>
+    <Files Count="3">
+      <Item1>
+        <Filename Value="..\..\Design\registervirtualtreeview.pas"/>
+        <HasRegisterProc Value="True"/>
+        <UnitName Value="registervirtualtreeview"/>
+      </Item1>
+      <Item2>
+        <Filename Value="..\..\Design\VTIDEEditors.pas"/>
+        <UnitName Value="VTIDEEditors"/>
+      </Item2>
+      <Item3>
+        <Filename Value="..\..\Design\ideicons.lrs"/>
+        <Type Value="LRS"/>
+      </Item3>
+    </Files>
+    <RequiredPkgs Count="3">
+      <Item1>
+        <PackageName Value="virtualtreeview"/>
+      </Item1>
+      <Item2>
+        <PackageName Value="IDEIntf"/>
+      </Item2>
+      <Item3>
+        <PackageName Value="FCL"/>
+      </Item3>
+    </RequiredPkgs>
+    <UsageOptions>
+      <UnitPath Value="$(PkgOutDir)"/>
+    </UsageOptions>
+    <PublishOptions>
+      <Version Value="2"/>
+    </PublishOptions>
+  </Package>
+</CONFIG>
