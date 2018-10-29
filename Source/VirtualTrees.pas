@@ -1001,7 +1001,7 @@ type
     procedure SetStyle(Value: TVirtualTreeColumnStyle);
     procedure SetWidth(Value: Integer);
   protected
-    procedure ComputeHeaderLayout(DC: HDC; const Client: TRect; UseHeaderGlyph, UseSortGlyph: Boolean;
+    procedure ComputeHeaderLayout(DC: HDC; const Client: TRect; UseHeaderGlyph: Boolean; const UseSortGlyph: Integer;
       var HeaderGlyphPos, SortGlyphPos: TPoint; var SortGlyphSize: TSize; var TextBounds: TRect; DrawFormat: Cardinal;
       CalculateTextRect: Boolean = False);
     procedure GetAbsoluteBounds(var Left, Right: Integer);
@@ -1234,6 +1234,12 @@ type
     crNodeMoved     // a node has been moved to a new place
   ); // desribes what made a structure change event happen
 
+  TSortInfoEntry = record
+    Column: TColumnIndex;
+    Direction: TSortDirection;
+  end;
+  TSortInfo = array of TSortInfoEntry;
+
   TVTHeader = class(TPersistent)
   private
     FOwner: TBaseVirtualTree;
@@ -1253,8 +1259,7 @@ type
     FFixedAreaConstraints: TVTFixedAreaConstraints; // Percentages for the fixed area (header, fixed columns).
     FImages: TCustomImageList;
     FImageChangeLink: TChangeLink;     // connections to the image list to get notified about changes
-    FSortColumn: TColumnIndex;
-    FSortDirection: TSortDirection;
+    FSortInfo: TSortInfo;
     FDragImage: TVTDragImage;          // drag image management during header drag
     FLastWidth: Integer;               // Used to adjust spring columns. This is the width of all visible columns,
                                        // not the header rectangle.
@@ -1274,9 +1279,8 @@ type
     procedure SetMinHeight(Value: Integer);
     procedure SetOptions(Value: TVTHeaderOptions);
     procedure SetParentFont(Value: Boolean);
-    procedure SetSortColumn(Value: TColumnIndex);
-    procedure SetSortDirection(const Value: TSortDirection);
     procedure SetStyle(Value: TVTHeaderStyle);
+    function GetSort(Index: Integer): TSortInfoEntry;
   protected
     FStates: THeaderStates;            // Used to keep track of internal states the header can enter.
     FDragStart: TPoint;                // initial mouse drag position
@@ -1299,7 +1303,7 @@ type
     function DoGetPopupMenu(Column: TColumnIndex; Position: TPoint): TPopupMenu; virtual;
     function DoHeightTracking(var P: TPoint; Shift: TShiftState): Boolean; virtual;
     function DoHeightDblClickResize(var P: TPoint; Shift: TShiftState): Boolean; virtual;
-    procedure DoSetSortColumn(Value: TColumnIndex); virtual;
+    procedure SortInfoChanged(const aOldSortInfo: TSortInfo); virtual;
     procedure DragTo(const P: TPoint);
     procedure FixedAreaConstraintsChanged(Sender: TObject);
     function GetColumnsClass: TVirtualTreeColumnsClass; virtual;
@@ -1329,6 +1333,12 @@ type
       Options: TVTColumnOptions = [coVisible]): Integer;
     procedure RestoreColumns;
     procedure SaveToStream(const Stream: TStream); virtual;
+    procedure DeleteSort(const aColumn: TColumnIndex);
+    procedure ToggleOrAddSort(const aColumn: TColumnIndex; const aClearOld: Boolean);
+    procedure AddSort(const aColumn: TColumnIndex; const aDirection: TSortDirection);
+    function GetSortIndex(const aColumn: TColumnIndex): Integer;
+    function SortCount: Integer;
+    property Sort[Index: Integer]: TSortInfoEntry read GetSort;
 
     property DragImage: TVTDragImage read FDragImage;
     property States: THeaderStates read FStates;
@@ -1349,8 +1359,6 @@ type
     property Options: TVTHeaderOptions read FOptions write SetOptions default [hoColumnResize, hoDrag, hoShowSortGlyphs];
     property ParentFont: Boolean read FParentFont write SetParentFont default False;
     property PopupMenu: TPopupMenu read FPopupMenu write FPopupMenu;
-    property SortColumn: TColumnIndex read FSortColumn write SetSortColumn default NoColumn;
-    property SortDirection: TSortDirection read FSortDirection write SetSortDirection default sdAscending;
     property Style: TVTHeaderStyle read FStyle write SetStyle default hsThickButtons;
   end;
 
@@ -1400,8 +1408,8 @@ type
     IsDownIndex,
     IsEnabled,
     ShowHeaderGlyph,
-    ShowSortGlyph,
     ShowRightBorder: Boolean;
+    ShowSortGlyph: Integer;
     DropMark: TVTDropMarkMode;
     GlyphPos,
     SortGlyphPos: TPoint;
@@ -3147,8 +3155,8 @@ type
     function ScrollIntoView(Node: PVirtualNode; Center: Boolean; Horizontally: Boolean = False): Boolean; overload;
     function ScrollIntoView(Column: TColumnIndex; Center: Boolean): Boolean; overload;
     procedure SelectAll(VisibleOnly: Boolean);
-    procedure Sort(Node: PVirtualNode; Column: TColumnIndex; Direction: TSortDirection; DoInit: Boolean = True); virtual;
-    procedure SortTree(Column: TColumnIndex; Direction: TSortDirection; DoInit: Boolean = True); virtual;
+    procedure Sort(Node: PVirtualNode; const SortInfo: TSortInfo; DoInit: Boolean = True); virtual;
+    procedure SortTree(const SortInfo: TSortInfo; DoInit: Boolean = True); virtual;
     procedure ToggleNode(Node: PVirtualNode);
     function UpdateAction(Action: TBasicAction): Boolean; override;
     procedure UpdateHorizontalRange;
@@ -6783,7 +6791,12 @@ begin
               Break;
             end;
         end;
-        AdjustColumnIndex(FSortColumn);
+        for I := High(FSortInfo) downto Low(FSortInfo) do
+        begin
+          AdjustColumnIndex(FSortInfo[I].Column);
+          if FSortInfo[I].Column=NoColumn then
+            System.Delete(FSortInfo, I, 1);
+        end;
       end;
     end;
   end;
@@ -7203,7 +7216,7 @@ end;
 
 //----------------------------------------------------------------------------------------------------------------------
 
-procedure TVirtualTreeColumn.ComputeHeaderLayout(DC: HDC; const Client: TRect; UseHeaderGlyph, UseSortGlyph: Boolean;
+procedure TVirtualTreeColumn.ComputeHeaderLayout(DC: HDC; const Client: TRect; UseHeaderGlyph: Boolean; const UseSortGlyph: Integer;
   var HeaderGlyphPos, SortGlyphPos: TPoint; var SortGlyphSize: TSize; var TextBounds: TRect; DrawFormat: Cardinal;
   CalculateTextRect: Boolean = False);
 
@@ -7230,7 +7243,7 @@ var
 begin
   UseText := Length(FText) > 0;
   // If nothing is to show then don't waste time with useless preparation.
-  if not (UseText or UseHeaderGlyph or UseSortGlyph) then
+  if not (UseText or UseHeaderGlyph or (UseSortGlyph>=0)) then
     Exit;
 
   CurrentAlignment := CaptionAlignment;
@@ -7252,7 +7265,7 @@ begin
         end
     else
       HeaderGlyphSize := Point(0, 0);
-    if UseSortGlyph then
+    if UseSortGlyph>=0 then
     begin
       if tsUseExplorerTheme in FHeader.Treeview.FStates then
       begin
@@ -7307,7 +7320,7 @@ begin
   end;
 
   // Check first for the special case where nothing is shown except the sort glyph.
-  if UseSortGlyph and not (UseText or UseHeaderGlyph) then
+  if (UseSortGlyph>=0) and not (UseText or UseHeaderGlyph) then
   begin
     // Center the sort glyph in the available area if nothing else is there.
     SortGlyphPos := Point((ClientSize.X - SortGlyphSize.cx) div 2, (ClientSize.Y - SortGlyphSize.cy) div 2);
@@ -7342,7 +7355,7 @@ begin
       taLeftJustify:
         begin
           MinLeft := FMargin;
-          if UseSortGlyph and (FBiDiMode <> bdLeftToRight) then
+          if (UseSortGlyph>=0) and (FBiDiMode <> bdLeftToRight) then
           begin
             // In RTL context is the sort glyph placed on the left hand side.
             SortGlyphPos.X := MinLeft;
@@ -7380,7 +7393,7 @@ begin
               Inc(MinLeft, HeaderGlyphSize.X + FSpacing);
             end;
           end;
-          if UseSortGlyph and (FBiDiMode = bdLeftToRight) then
+          if (UseSortGlyph>=0) and (FBiDiMode = bdLeftToRight) then
             SortGlyphPos.X := MinLeft;
         end;
       taCenter:
@@ -7389,7 +7402,7 @@ begin
           begin
             HeaderGlyphPos.X := (ClientSize.X - HeaderGlyphSize.X) div 2;
             TextPos.X := (ClientSize.X - TextSize.cx) div 2;
-            if UseSortGlyph then
+            if (UseSortGlyph>=0) then
               Dec(TextPos.X, SortGlyphSize.cx div 2);
           end
           else
@@ -7416,7 +7429,7 @@ begin
             MaxRight := TextPos.X + TextSize.cx;
           end;
           // Place the sort glyph directly to the left or right of the larger item.
-          if UseSortGlyph then
+          if (UseSortGlyph>=0) then
             if FBiDiMode = bdLeftToRight then
             begin
               // Sort glyph on the right hand side.
@@ -7431,7 +7444,7 @@ begin
     else
       // taRightJustify
       MaxRight := ClientSize.X - FMargin;
-      if UseSortGlyph and (FBiDiMode = bdLeftToRight) then
+      if (UseSortGlyph>=0) and (FBiDiMode = bdLeftToRight) then
       begin
         // In LTR context is the sort glyph placed on the right hand side.
         Dec(MaxRight, SortGlyphSize.cx);
@@ -7468,7 +7481,7 @@ begin
           MaxRight := HeaderGlyphPos.X - FSpacing;
         end;
       end;
-      if UseSortGlyph and (FBiDiMode <> bdLeftToRight) then
+      if (UseSortGlyph>=0) and (FBiDiMode <> bdLeftToRight) then
         SortGlyphPos.X := MaxRight - SortGlyphSize.cx;
     end;
   end;
@@ -7480,7 +7493,7 @@ begin
   // These are the maximum bounds. Nothing goes beyond them.
   MinLeft := FMargin;
   MaxRight := ClientSize.X - FMargin;
-  if UseSortGlyph then
+  if (UseSortGlyph>=0) then
   begin
     if FBiDiMode = bdLeftToRight then
     begin
@@ -8223,20 +8236,7 @@ begin
   if (hoHeaderClickAutoSort in Header.Options) and (HitInfo.Button = mbLeft) and not DblClick and not (hhiOnCheckbox in HitInfo.HitPosition) and (HitInfo.Column >= 0) then
   begin
     // handle automatic setting of SortColumn and toggling of the sort order
-    if HitInfo.Column <> Header.SortColumn then
-    begin
-      // set sort column
-      Header.SortColumn := HitInfo.Column;
-      Header.SortDirection := Self[Header.SortColumn].DefaultSortDirection;
-    end//if
-    else
-    begin
-      // toggle sort direction
-      if Header.SortDirection = sdDescending then
-        Header.SortDirection := sdAscending
-      else
-        Header.SortDirection := sdDescending;
-    end;//else
+    Header.ToggleOrAddSort(HitInfo.Column, not(ssCtrl in HitInfo.Shift));
   end;//if
 
   if DblClick then
@@ -8587,7 +8587,6 @@ begin
       begin
         FAutoSizeIndex := NoColumn;
         FMainColumn := NoColumn;
-        FSortColumn := NoColumn;
       end;
 
     with Header.Treeview do
@@ -9145,6 +9144,7 @@ var
     Pos: TRect;
     DrawHot: Boolean;
     ImageWidth: Integer;
+    xOldFont: TFont;
   begin
     ColImageInfo.Ghosted := False;
     PaintInfo.Column := Items[AColumn];
@@ -9169,7 +9169,11 @@ var
 
       IsEnabled := (coEnabled in FOptions) and (FHeader.Treeview.Enabled);
       ShowHeaderGlyph := (hoShowImages in FHeader.FOptions) and ((Assigned(Images) and (FImageIndex > -1)) or FCheckBox);
-      ShowSortGlyph := (AColumn = FHeader.FSortColumn) and (hoShowSortGlyphs in FHeader.FOptions);
+      if (hoShowSortGlyphs in FHeader.FOptions) then
+        ShowSortGlyph := FHeader.GetSortIndex(AColumn)
+      else
+        ShowSortGlyph := -1;
+
       WrapCaption := coWrapCaption in FOptions;
 
       PaintRectangle := ATargetRect;
@@ -9258,7 +9262,7 @@ var
           ImageWidth := 0;
 
         if not (hpeHeaderGlyph in ActualElements) and ShowHeaderGlyph and
-          (not ShowSortGlyph or (FBiDiMode <> bdLeftToRight) or (GlyphPos.X + ImageWidth <= SortGlyphPos.X) ) then
+          (not (ShowSortGlyph>=0) or (FBiDiMode <> bdLeftToRight) or (GlyphPos.X + ImageWidth <= SortGlyphPos.X) ) then
         begin
           if not FCheckBox then
           begin
@@ -9300,14 +9304,18 @@ var
             DrawButtonText(TargetCanvas, ColCaptionText, TextRectangle, IsEnabled, DrawHot, DrawFormat, WrapCaption);
 
         // sort glyph
-        if not (hpeSortGlyph in ActualElements) and ShowSortGlyph then
+        if not (hpeSortGlyph in ActualElements) and (ShowSortGlyph>=0) then
         begin
+          if Length(FHeader.FSortInfo)>1 then
+          begin // show indexes if more than 1 sort column - move arrow up
+            Dec(SortGlyphPos.Y, 3);
+          end;
           if tsUseExplorerTheme in FHeader.Treeview.FStates then
           begin
             Pos.TopLeft := SortGlyphPos;
             Pos.Right := Pos.Left + SortGlyphSize.cx;
             Pos.Bottom := Pos.Top + SortGlyphSize.cy;
-            if FHeader.FSortDirection = sdAscending then
+            if FHeader.FSortInfo[ShowSortGlyph].Direction = sdAscending then
               Glyph := thHeaderSortArrowSortedUp
             else
               Glyph := thHeaderSortArrowSortedDown;
@@ -9316,7 +9324,8 @@ var
           end
           else
           begin
-            SortIndex := SortGlyphs[FHeader.FSortDirection, tsUseThemes in FHeader.Treeview.FStates];
+            SortGlyphSize := Size(UtilityImageSize, UtilityImageSize);
+            SortIndex := SortGlyphs[FHeader.FSortInfo[ShowSortGlyph].Direction, tsUseThemes in FHeader.Treeview.FStates];
             {$ifdef USE_DELPHICOMPAT}
             DirectMaskBlt(FHeaderBitmap.Canvas.Handle, SortGlyphPos.X, SortGlyphPos.Y, UtilityImageSize, UtilityImageSize, UtilityImages.Canvas.Handle,
               SortIndex * UtilityImageSize, 0, UtilityImages.MaskHandle);
@@ -9324,6 +9333,22 @@ var
             StretchMaskBlt(FHeaderBitmap.Canvas.Handle, SortGlyphPos.X, SortGlyphPos.Y, UtilityImageSize, UtilityImageSize, UtilityImages.Canvas.Handle,
               SortIndex * UtilityImageSize, 0, UtilityImageSize, UtilityImageSize, UtilityImages.MaskHandle,SortIndex * UtilityImageSize, 0, SRCCOPY);
             {$endif}
+          end;
+          if Length(FHeader.FSortInfo)>1 then
+          begin // show indexes if more than 1 sort column
+            xOldFont := TFont.Create;
+            try
+              xOldFont.Assign(TargetCanvas.Font);
+              TargetCanvas.Font.Color := clGrayText;
+              TargetCanvas.Font.Size := 8;
+              TargetCanvas.Font.Name := 'default';
+              Pos.Left := SortGlyphPos.X + (SortGlyphSize.cx-TargetCanvas.TextWidth(IntToStr(ShowSortGlyph+1))) div 2;
+              Pos.Top := ATargetRect.Bottom - TargetCanvas.TextHeight('0');
+              TargetCanvas.TextOut(Pos.Left, Pos.Top, IntToStr(ShowSortGlyph+1));
+              TargetCanvas.Font.Assign(xOldFont);
+            finally
+              xOldFont.Free;
+            end;
           end;
         end;
 
@@ -9578,8 +9603,6 @@ begin
   FImageChangeLink := TChangeLink.Create;
   FImageChangeLink.OnChange := ImageListChange;
 
-  FSortColumn := NoColumn;
-  FSortDirection := sdAscending;
   FMainColumn := NoColumn;
 
   FDragImage := TVTDragImage.Create(AOwner);
@@ -9593,6 +9616,25 @@ begin
 
   FFixedAreaConstraints := TVTFixedAreaConstraints.Create(Self);
   FFixedAreaConstraints.OnChange := FixedAreaConstraintsChanged;
+end;
+
+procedure TVTHeader.AddSort(const aColumn: TColumnIndex;
+  const aDirection: TSortDirection);
+var
+  I: Integer;
+  xOldSortInfo: TSortInfo;
+begin
+  xOldSortInfo := Copy(FSortInfo);
+
+  I := GetSortIndex(aColumn);
+  if I>=0 then
+    System.Delete(FSortInfo, I, 1);
+
+  SetLength(FSortInfo, Length(FSortInfo)+1);
+  FSortInfo[High(FSortInfo)].Column := aColumn;
+  FSortInfo[High(FSortInfo)].Direction := aDirection;
+
+  SortInfoChanged(xOldSortInfo);
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -9893,31 +9935,6 @@ end;
 
 //----------------------------------------------------------------------------------------------------------------------
 
-procedure TVTHeader.SetSortColumn(Value: TColumnIndex);
-
-begin
-  if csLoading in Treeview.ComponentState then
-    FSortColumn := Value
-  else
-    DoSetSortColumn(Value);
-end;
-
-//----------------------------------------------------------------------------------------------------------------------
-
-procedure TVTHeader.SetSortDirection(const Value: TSortDirection);
-
-begin
-  if Value <> FSortDirection then
-  begin
-    FSortDirection := Value;
-    Invalidate(nil);
-    if ((toAutoSort in Treeview.FOptions.FAutoOptions) or (hoHeaderClickAutoSort in Options)) and (Treeview.FUpdateCount = 0) then
-      Treeview.SortTree(FSortColumn, FSortDirection, True);
-  end;
-end;
-
-//----------------------------------------------------------------------------------------------------------------------
-
 function TVTHeader.CanSplitterResize(P: TPoint): Boolean;
 
 begin
@@ -9936,6 +9953,39 @@ begin
     if not (csLoading in Treeview.ComponentState) then
       Invalidate(nil);
   end;
+end;
+
+function TVTHeader.SortCount: Integer;
+begin
+  Result := Length(FSortInfo);
+end;
+
+procedure TVTHeader.ToggleOrAddSort(const aColumn: TColumnIndex;
+  const aClearOld: Boolean);
+var
+  I: Integer;
+  xOldSortInfo: TSortInfo;
+begin
+  xOldSortInfo := Copy(FSortInfo);
+
+  if aClearOld and not ((Length(FSortInfo) = 1) and (FSortInfo[0].Column = aColumn)) then
+    SetLength(FSortInfo, 0);
+
+  I := GetSortIndex(aColumn);
+  if I = -1 then
+  begin
+    SetLength(FSortInfo, Length(FSortInfo)+1);
+    FSortInfo[High(FSortInfo)].Column := aColumn;
+    FSortInfo[High(FSortInfo)].Direction := sdAscending;
+  end else
+  begin
+    if FSortInfo[I].Direction = sdAscending then
+      FSortInfo[I].Direction := sdDescending
+    else
+      FSortInfo[I].Direction := sdAscending;
+  end;
+
+  SortInfoChanged(xOldSortInfo);
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -9963,6 +10013,20 @@ begin
   begin
     Self.FColumns[I].Width := MulDiv(Self.FColumns[I].Width, M, D);
   end;//for I
+end;
+
+procedure TVTHeader.DeleteSort(const aColumn: TColumnIndex);
+var
+  I: Integer;
+  xOldSortInfo: TSortInfo;
+begin
+  xOldSortInfo := Copy(FSortInfo);
+
+  I := GetSortIndex(aColumn);
+  if I>=0 then
+    System.Delete(FSortInfo, I, 1);
+
+  SortInfoChanged(xOldSortInfo);
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -10188,23 +10252,17 @@ end;
 
 //----------------------------------------------------------------------------------------------------------------------
 
-procedure TVTHeader.DoSetSortColumn(Value: TColumnIndex);
-
+procedure TVTHeader.SortInfoChanged(const aOldSortInfo: TSortInfo);
+var
+  I: Integer;
 begin
-  if Value < NoColumn then
-    Value := NoColumn;
-  if Value > Columns.Count - 1 then
-    Value := Columns.Count - 1;
-  if FSortColumn <> Value then
-  begin
-    if FSortColumn > NoColumn then
-      Invalidate(Columns[FSortColumn]);
-    FSortColumn := Value;
-    if FSortColumn > NoColumn then
-      Invalidate(Columns[FSortColumn]);
-    if ((toAutoSort in Treeview.FOptions.FAutoOptions) or (hoHeaderClickAutoSort in Options)) and (Treeview.FUpdateCount = 0) then
-      Treeview.SortTree(FSortColumn, FSortDirection, True);
-  end;
+  for I := Low(aOldSortInfo) to High(aOldSortInfo) do
+    Invalidate(Columns[aOldSortInfo[I].Column]);
+  for I := Low(FSortInfo) to High(FSortInfo) do
+    Invalidate(Columns[FSortInfo[I].Column]);
+
+  if ((toAutoSort in Treeview.FOptions.FAutoOptions) or (hoHeaderClickAutoSort in Options)) and (Treeview.FUpdateCount = 0) then
+    Treeview.SortTree(FSortInfo, True);
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -10305,6 +10363,19 @@ begin
     Include(Result, ssCtrl);
   if GetKeyState(VK_MENU) < 0 then
     Include(Result, ssAlt);
+end;
+
+function TVTHeader.GetSort(Index: Integer): TSortInfoEntry;
+begin
+  Result := FSortInfo[Index];
+end;
+
+function TVTHeader.GetSortIndex(const aColumn: TColumnIndex): Integer;
+begin
+  for Result := Low(FSortInfo) to High(FSortInfo) do
+    if FSortInfo[Result].Column = aColumn then
+      Exit;
+  Result := -1;
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -11138,8 +11209,7 @@ begin
     Options := TVTHeader(Source).Options;
     ParentFont := TVTHeader(Source).ParentFont;
     PopupMenu := TVTHeader(Source).PopupMenu;
-    SortColumn := TVTHeader(Source).SortColumn;
-    SortDirection := TVTHeader(Source).SortDirection;
+    FSortInfo := Copy(TVTHeader(Source).FSortInfo);
     Style := TVTHeader(Source).Style;
 
     RescaleHeader;
@@ -11381,9 +11451,9 @@ begin
     ReadBuffer(Dummy, SizeOf(Dummy));
     MainColumn := Dummy;
     ReadBuffer(Dummy, SizeOf(Dummy));
-    SortColumn := Dummy;
+    //SortColumn := Dummy; ToDo
     ReadBuffer(Dummy, SizeOf(Dummy));
-    SortDirection := TSortDirection(Byte(Dummy));
+    //SortDirection := TSortDirection(Byte(Dummy)); ToDo
 
     // Read data introduced by stream version 5+.
     ReadBuffer(Dummy, SizeOf(Dummy));
@@ -11654,9 +11724,9 @@ begin
     // Data introduced by stream version 1.
     Dummy := FMainColumn;
     WriteBuffer(Dummy, SizeOf(Dummy));
-    Dummy := FSortColumn;
+    Dummy := -1; // FSortColumn; ToDo
     WriteBuffer(Dummy, SizeOf(Dummy));
-    Dummy := Byte(FSortDirection);
+    Dummy := -1; // Byte(FSortDirection); ToDo
     WriteBuffer(Dummy, SizeOf(Dummy));
 
     // Data introduced by stream version 5.
@@ -14333,8 +14403,8 @@ begin
 
           AdjustTotalCount(Node, Count, True);
           Node.ChildCount := NewChildCount;
-          if (FUpdateCount = 0) and (toAutoSort in FOptions.FAutoOptions) and (FHeader.FSortColumn > InvalidColumn) then
-            Sort(Node, FHeader.FSortColumn, FHeader.FSortDirection, True);
+          if (FUpdateCount = 0) and (toAutoSort in FOptions.FAutoOptions) and (Length(FHeader.FSortInfo) > 0) then
+            Sort(Node, FHeader.FSortInfo, True);
 
           InvalidateCache;
         end
@@ -25454,8 +25524,8 @@ begin
           StructureChange(Parent, crChildAdded);
       end;
 
-      if (toAutoSort in FOptions.FAutoOptions) and (FHeader.FSortColumn > InvalidColumn) then
-        Sort(Parent, FHeader.FSortColumn, FHeader.FSortDirection, True);
+      if (toAutoSort in FOptions.FAutoOptions) and (Length(FHeader.FSortInfo) > 0) then
+        Sort(Parent, FHeader.FSortInfo, True);
 
       InvalidateToBottom(Parent);
       //lcl 
@@ -26350,7 +26420,7 @@ begin
           DoChange(FLastChangedNode);
       finally
         if toAutoSort in FOptions.FAutoOptions then
-          SortTree(FHeader.FSortColumn, FHeader.FSortDirection, True);
+          SortTree(FHeader.FSortInfo, True);
 
         SetUpdateState(False);
         if HandleAllocated then
@@ -29336,17 +29406,17 @@ begin
     if FUpdateCount = 0 then
     begin
       // If auto sort is enabled then sort the node or its parent (depending on the insert mode).
-      if (toAutoSort in FOptions.FAutoOptions) and (FHeader.FSortColumn > InvalidColumn) then
+      if (toAutoSort in FOptions.FAutoOptions) and (Length(FHeader.FSortInfo) > 0) then
         case Mode of
           amInsertBefore,
           amInsertAfter:
             // Here no initialization is necessary because *if* a node has already got children then it
             // must also be initialized.
             // Note: Node can never be FRoot at this point.
-            Sort(Node.Parent, FHeader.FSortColumn, FHeader.FSortDirection, True);
+            Sort(Node.Parent, FHeader.FSortInfo, True);
           amAddChildFirst,
           amAddChildLast:
-            Sort(Node, FHeader.FSortColumn, FHeader.FSortDirection, True);
+            Sort(Node, FHeader.FSortInfo, True);
         end;
 
       UpdateScrollBars(True);
@@ -31380,7 +31450,7 @@ end;
 
 //----------------------------------------------------------------------------------------------------------------------
 
-procedure TBaseVirtualTree.Sort(Node: PVirtualNode; Column: TColumnIndex; Direction: TSortDirection; DoInit: Boolean = True);
+procedure TBaseVirtualTree.Sort(Node: PVirtualNode; const SortInfo: TSortInfo; DoInit: Boolean = True);
 
 // Sorts the given node. The application is queried about how to sort via the OnCompareNodes event.
 // Column is simply passed to the the compare function so the application can also sort in a particular column.
@@ -31395,7 +31465,7 @@ procedure TBaseVirtualTree.Sort(Node: PVirtualNode; Column: TColumnIndex; Direct
 
   var
     Dummy: TVirtualNode;
-    CompareResult: Integer;
+    CompareResult, I: Integer;
   begin
     // This avoids checking for Result = nil in the loops.
     Result := @Dummy;
@@ -31404,7 +31474,18 @@ procedure TBaseVirtualTree.Sort(Node: PVirtualNode; Column: TColumnIndex; Direct
       if OperationCanceled then
         CompareResult := 0
       else
-        CompareResult := DoCompare(A, B, Column);
+      begin
+        for I := Low(SortInfo) to High(SortInfo) do
+        begin
+          CompareResult := DoCompare(A, B, SortInfo[I].Column);
+          if CompareResult<>0 then
+          begin
+            if SortInfo[I].Direction=sdDescending then
+              CompareResult := -CompareResult;
+            break;
+          end;
+        end;
+      end;
 
       if CompareResult <= 0 then
       begin
@@ -31431,49 +31512,6 @@ procedure TBaseVirtualTree.Sort(Node: PVirtualNode; Column: TColumnIndex; Direct
 
   //---------------------------------------------------------------------------
 
-  function MergeDescending(A, B: PVirtualNode): PVirtualNode;
-
-  // Merges A and B (which both must be sorted via Compare) into one list.
-
-  var
-    Dummy: TVirtualNode;
-    CompareResult: Integer;
-
-  begin
-    // this avoids checking for Result = nil in the loops
-    Result := @Dummy;
-    while Assigned(A) and Assigned(B) do
-    begin
-      if OperationCanceled then
-        CompareResult := 0
-      else
-        CompareResult := DoCompare(A, B, Column);
-
-      if CompareResult >= 0 then
-      begin
-        Result.NextSibling := A;
-        Result := A;
-        A := A.NextSibling;
-      end
-      else
-      begin
-        Result.NextSibling := B;
-        Result := B;
-        B := B.NextSibling;
-      end;
-    end;
-
-    // Just append the list which is not nil (or set end of result list to nil if both lists are nil).
-    if Assigned(A) then
-      Result.NextSibling := A
-    else
-      Result.NextSibling := B;
-    // Return start of the newly merged list.
-    Result := Dummy.NextSibling;
-  end;
-
-  //---------------------------------------------------------------------------
-
   function MergeSortAscending(var Node: PVirtualNode; N: Cardinal): PVirtualNode;
 
   // Sorts the list of nodes given by Node (which must not be nil).
@@ -31487,30 +31525,6 @@ procedure TBaseVirtualTree.Sort(Node: PVirtualNode; Column: TColumnIndex; Direct
       A := MergeSortAscending(Node, N div 2);
       B := MergeSortAscending(Node, (N + 1) div 2);
       Result := MergeAscending(A, B);
-    end
-    else
-    begin
-      Result := Node;
-      Node := Node.NextSibling;
-      Result.NextSibling := nil;
-    end;
-  end;
-
-  //---------------------------------------------------------------------------
-
-  function MergeSortDescending(var Node: PVirtualNode; N: Cardinal): PVirtualNode;
-
-  // Sorts the list of nodes given by Node (which must not be nil).
-
-  var
-    A, B: PVirtualNode;
-
-  begin
-    if N > 1 then
-    begin
-      A := MergeSortDescending(Node, N div 2);
-      B := MergeSortDescending(Node, (N + 1) div 2);
-      Result := MergeDescending(A, B);
     end
     else
     begin
@@ -31550,11 +31564,8 @@ begin
       begin
         StartOperation(okSortNode);
         try
-          // Sort the linked list, check direction flag only once.
-          if Direction = sdAscending then
-            Node.FirstChild := MergeSortAscending(Node.FirstChild, Node.ChildCount)
-          else
-            Node.FirstChild := MergeSortDescending(Node.FirstChild, Node.ChildCount);
+          // Sort the linked list
+          Node.FirstChild := MergeSortAscending(Node.FirstChild, Node.ChildCount)
         finally
           EndOperation(okSortNode);
         end;
@@ -31585,7 +31596,7 @@ end;
 
 //----------------------------------------------------------------------------------------------------------------------
 
-procedure TBaseVirtualTree.SortTree(Column: TColumnIndex; Direction: TSortDirection; DoInit: Boolean = True);
+procedure TBaseVirtualTree.SortTree(const SortInfo: TSortInfo; DoInit: Boolean = True);
 
   //--------------- local function --------------------------------------------
 
@@ -31597,7 +31608,7 @@ procedure TBaseVirtualTree.SortTree(Column: TColumnIndex; Direction: TSortDirect
     Run: PVirtualNode;
 
   begin
-    Sort(Node, Column, Direction, DoInit);
+    Sort(Node, SortInfo, DoInit);
     // Recurse to next level
     Run := Node.FirstChild;
     while Assigned(Run) and not FOperationCanceled do
@@ -31619,7 +31630,7 @@ begin
   // is modified. Otherwise the EndUpdate call will recurse here.
   Inc(FUpdateCount);
   try
-    if Column > InvalidColumn then
+    if Length(SortInfo) > 0 then
     begin
       StartOperation(okSortTree);
       try
@@ -32001,7 +32012,7 @@ begin
                 end;
               end;
               if toAutoSort in FOptions.FAutoOptions then
-                Sort(Node, FHeader.FSortColumn, FHeader.FSortDirection, False);
+                Sort(Node, FHeader.FSortInfo, False);
             end;// if UpdateCount = 0
 
             Include(Node.States, vsExpanded);
