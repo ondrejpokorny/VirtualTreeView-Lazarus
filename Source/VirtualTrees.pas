@@ -3156,7 +3156,8 @@ type
     function ScrollIntoView(Column: TColumnIndex; Center: Boolean): Boolean; overload;
     procedure SelectAll(VisibleOnly: Boolean);
     procedure Sort(Node: PVirtualNode; const SortInfo: TSortInfo; DoInit: Boolean = True); virtual;
-    procedure SortTree(const SortInfo: TSortInfo; DoInit: Boolean = True); virtual;
+    procedure SortTree(const SortInfo: TSortInfo; DoInit: Boolean = True); virtual; overload;
+    procedure SortTree; overload;
     procedure ToggleNode(Node: PVirtualNode);
     function UpdateAction(Action: TBasicAction): Boolean; override;
     procedure UpdateHorizontalRange;
@@ -31592,6 +31593,14 @@ begin
       end;
     end;
   end;
+end;
+
+//----------------------------------------------------------------------------------------------------------------------
+
+procedure TBaseVirtualTree.SortTree;
+
+begin
+  SortTree(Header.FSortInfo);
 end;
 
 //----------------------------------------------------------------------------------------------------------------------
